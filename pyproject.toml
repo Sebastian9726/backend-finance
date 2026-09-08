@@ -41,6 +41,11 @@ include = ["app*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Un solo event loop para toda la corrida. Con el default (uno por prueba), el
+# engine de alcance sesion queda atado al loop del primer test y todos los
+# demas fallan con InterfaceError al reusar sus conexiones.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 
 [tool.ruff]
 line-length = 100
@@ -48,3 +53,8 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+# Sin esto, ruff toma `alembic` por paquete propio porque existe el directorio
+# alembic/ en la raiz, y lo mueve al bloque de imports locales.
+known-third-party = ["alembic"]

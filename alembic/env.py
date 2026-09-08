@@ -16,7 +16,12 @@ from app.db.base import Base
 from app.models import *  # noqa: F401,F403
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.sync_database_url)
+
+# Solo se toma la URL del entorno si quien invoca no fijo una. Las pruebas
+# pasan la URL de `finance_test` por Config; sobrescribirla aqui haria que las
+# migraciones de las pruebas corrieran contra la base de desarrollo.
+if not config.get_main_option("sqlalchemy.url", None):
+    config.set_main_option("sqlalchemy.url", settings.sync_database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -24,9 +29,13 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+def _url() -> str:
+    return config.get_main_option("sqlalchemy.url")
+
+
 def run_migrations_offline() -> None:
     context.configure(
-        url=settings.sync_database_url,
+        url=_url(),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
