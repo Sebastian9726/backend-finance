@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     )
 
     # --- Base de datos ---
-    database_url: str = "postgresql+asyncpg://finance:finance_dev_password@localhost:5432/finance"
+    database_url: str = "postgresql+asyncpg://finance:finance_dev_password@localhost:5433/finance"
 
     # --- Seguridad ---
     jwt_secret_key: str = "cambiar-esto-en-produccion"
