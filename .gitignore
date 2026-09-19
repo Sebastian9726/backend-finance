@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# Entorno
+.env
+.env.*
+!.env.example
+
+# Editores / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Notas personales de trabajo (no son del proyecto).
+# El patron va con comodin: "notas" a secas solo tapa un archivo o carpeta
+# llamado exactamente asi, y dejaba pasar notas.txt.
+notas*
