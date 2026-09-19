@@ -25,7 +25,10 @@ _ADMIN_URL = settings.database_url.rsplit("/", 1)[0] + "/postgres"
 
 # Orden de truncado irrelevante gracias a CASCADE, pero se listan todas para
 # que agregar una tabla nueva y olvidarla salte como fuga entre pruebas.
-_TABLAS = "transactions, categories, accounts, refresh_tokens, exchange_rates, users"
+_TABLAS = (
+    "net_worth_snapshots, liability_balances, liabilities, asset_valuations, assets, "
+    "transactions, categories, accounts, refresh_tokens, exchange_rates, users"
+)
 
 
 async def _crear_base_de_pruebas() -> None:

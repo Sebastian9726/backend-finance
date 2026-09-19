@@ -30,15 +30,22 @@ from app.core.security import hash_password  # noqa: E402
 from app.models import (  # noqa: E402
     Account,
     AccountType,
+    Asset,
+    AssetType,
+    AssetValuation,
     Category,
     Currency,
     ExchangeRate,
+    Liability,
+    LiabilityBalance,
+    LiabilityType,
     Transaction,
     TransactionType,
     User,
 )
 from app.schemas.base import quantize_money  # noqa: E402
 from app.services.categories import seed_default_categories  # noqa: E402
+from app.services.networth import recompute_snapshots  # noqa: E402
 
 EMAIL = "demo@ejemplo.com"
 PASSWORD = "demo-finanzas-2026"
@@ -65,6 +72,25 @@ INGRESOS = [
     ("Honorarios", "Proyecto freelance", 800_000, 2_400_000, 1),
 ]
 
+# (nombre, tipo, moneda, valor inicial, variacion mensual, costo de adquisicion)
+# La variacion es el porcentaje que se mueve cada mes: el inmueble se valoriza
+# despacio, el carro se deprecia y el portafolio sube con ruido.
+ACTIVOS = [
+    ("Apartamento", AssetType.INMUEBLE, Currency.COP, 320_000_000, "0.6", 280_000_000),
+    ("Carro", AssetType.VEHICULO, Currency.COP, 62_000_000, "-0.9", 78_000_000),
+    ("Portafolio acciones", AssetType.INVERSION, Currency.COP, 18_000_000, "1.4", 15_000_000),
+    # En dolares: es el que hace visible que cada mes usa SU tasa de cambio.
+    ("Cuenta de ahorro USD", AssetType.AHORRO, Currency.USD, 4_500, "0.8", None),
+]
+
+# (nombre, tipo, saldo inicial, abono mensual, principal, tasa, cuota)
+DEUDAS = [
+    ("Credito hipotecario", LiabilityType.HIPOTECA, 185_000_000, 1_150_000, 210_000_000,
+     "11.8", 1_950_000),
+    ("Credito de vehiculo", LiabilityType.VEHICULO, 24_000_000, 900_000, 45_000_000,
+     "16.5", 1_180_000),
+]
+
 
 async def main() -> None:
     engine = create_async_engine(settings.database_url)
@@ -77,13 +103,20 @@ async def main() -> None:
         await _crear_tasas(db)
         categorias = await _mapa_categorias(db, user)
         total = await _crear_movimientos(db, user, cuentas, categorias)
+        activos = await _crear_activos(db, user)
+        deudas = await _crear_deudas(db, user)
         await db.commit()
+
+        # La serie se materializa al final, cuando ya existen todas las
+        # valuaciones y saldos: asi se recorre una sola vez cada cierre de mes.
+        serie = await recompute_snapshots(db, user)
 
     await engine.dispose()
 
     print(f"Usuario:    {EMAIL}")
     print(f"Contrasena: {PASSWORD}")
     print(f"Creadas:    {total} transacciones en {MESES} meses")
+    print(f"Patrimonio: {activos} activos, {deudas} deudas, {serie.meses} cierres mensuales")
 
 
 async def _limpiar(db: AsyncSession) -> None:
@@ -135,7 +168,12 @@ async def _crear_cuentas(db: AsyncSession, user: User) -> dict[str, Account]:
 
 
 async def _crear_tasas(db: AsyncSession) -> None:
-    """Una tasa al inicio de cada mes, con variacion realista del dolar.
+    """Tasas al inicio Y al cierre de cada mes, con variacion realista.
+
+    El cierre importa: los snapshots de patrimonio se fechan el ultimo dia del
+    mes, y si solo hubiera tasa del dia 1 el lookup tomaria la del mes anterior
+    y marcaria `tasa_estimada` en toda la serie -- una advertencia correcta pero
+    que, salida de datos de demostracion, seria puro ruido.
 
     Las tasas son globales, no del usuario, asi que borrar el usuario demo no
     se las lleva. Por eso van con ON CONFLICT: sin el, la segunda corrida del
@@ -144,17 +182,22 @@ async def _crear_tasas(db: AsyncSession) -> None:
     hoy = date.today()
     tasa = Decimal("3950.00")
     filas = []
-    for i in range(MESES + 1):
+    fechas: list[date] = []
+    for i in range(MESES, -1, -1):
+        fechas.append(_primer_dia(hoy, i))
+        fechas.append(_fin_de_mes_o_hoy(hoy, i))
+
+    for fecha in sorted(set(fechas)):
         filas.append(
             {
                 "id": uuid.uuid4(),
-                "fecha": _primer_dia(hoy, MESES - i),
+                "fecha": fecha,
                 "origen": Currency.USD.value,
                 "destino": Currency.COP.value,
                 "tasa": tasa,
             }
         )
-        tasa += Decimal(random.randint(-120, 180))
+        tasa += Decimal(random.randint(-90, 130))
 
     statement = pg_insert(ExchangeRate).values(filas)
     await db.execute(
@@ -249,6 +292,93 @@ def _agregar(
         )
     )
     return 1
+
+
+async def _crear_activos(db: AsyncSession, user: User) -> int:
+    """Activos con una valuacion por mes, para que la grafica tenga pendiente.
+
+    Sin varias valuaciones la serie seria una linea plana y no se veria si el
+    recalculo por cierre de mes funciona.
+    """
+    hoy = date.today()
+    for nombre, tipo, moneda, valor_inicial, variacion_pct, costo in ACTIVOS:
+        asset = Asset(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            nombre=nombre,
+            tipo=tipo,
+            moneda=moneda,
+            costo_adquisicion=Decimal(costo) if costo else None,
+            fecha_adquisicion=_primer_dia(hoy, MESES),
+        )
+        db.add(asset)
+
+        valor = Decimal(valor_inicial)
+        factor = Decimal("1") + Decimal(variacion_pct) / 100
+        for atras in range(MESES, -1, -1):
+            db.add(
+                AssetValuation(
+                    id=uuid.uuid4(),
+                    user_id=user.id,
+                    asset_id=asset.id,
+                    fecha=_fin_de_mes_o_hoy(hoy, atras),
+                    valor=quantize_money(valor),
+                    nota="Valuacion mensual",
+                )
+            )
+            # Un poco de ruido para que la curva no sea una recta perfecta.
+            valor = valor * factor * (Decimal("1") + Decimal(random.randint(-30, 30)) / 10_000)
+
+    await db.flush()
+    return len(ACTIVOS)
+
+
+async def _crear_deudas(db: AsyncSession, user: User) -> int:
+    """Deudas que se van abonando mes a mes, hasta un piso de cero."""
+    hoy = date.today()
+    for nombre, tipo, saldo_inicial, abono, principal, tasa, cuota in DEUDAS:
+        liability = Liability(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            nombre=nombre,
+            tipo=tipo,
+            moneda=Currency.COP,
+            principal=Decimal(principal),
+            tasa_interes=Decimal(tasa),
+            cuota_mensual=Decimal(cuota),
+            fecha_inicio=_primer_dia(hoy, MESES + 18),
+        )
+        db.add(liability)
+
+        saldo = Decimal(saldo_inicial)
+        for atras in range(MESES, -1, -1):
+            db.add(
+                LiabilityBalance(
+                    id=uuid.uuid4(),
+                    user_id=user.id,
+                    liability_id=liability.id,
+                    fecha=_fin_de_mes_o_hoy(hoy, atras),
+                    saldo=quantize_money(saldo),
+                    nota="Extracto mensual",
+                )
+            )
+            # El CHECK de la tabla no admite saldos negativos, y con razon: una
+            # deuda pagada vale cero, no menos que cero.
+            saldo = max(saldo - Decimal(abono), Decimal("0"))
+
+    await db.flush()
+    return len(DEUDAS)
+
+
+def _fin_de_mes_o_hoy(referencia: date, meses_atras: int) -> date:
+    """Ultimo dia del mes, salvo el mes en curso, que se fecha hoy.
+
+    Fechar el mes actual en su ultimo dia pondria la valuacion en el futuro, y
+    el snapshot del cierre todavia no ha ocurrido.
+    """
+    if meses_atras == 0:
+        return referencia
+    return _primer_dia(referencia, meses_atras - 1) - timedelta(days=1)
 
 
 def _primer_dia(referencia: date, meses_atras: int) -> date:

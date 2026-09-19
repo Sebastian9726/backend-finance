@@ -152,3 +152,97 @@ async def test_los_reportes_solo_cuentan_lo_propio(
     assert mio["gastos"] == "300000.00"
     assert ajeno["gastos"] == "0.00"
     assert ajeno["transacciones"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Patrimonio
+# ---------------------------------------------------------------------------
+
+_ACTIVO = {
+    "nombre": "Apartamento",
+    "tipo": "inmueble",
+    "moneda": "COP",
+    "valor_actual": "350000000.00",
+    "fecha_valor": "2026-01-31",
+}
+_DEUDA = {
+    "nombre": "Hipoteca",
+    "tipo": "hipoteca",
+    "moneda": "COP",
+    "saldo_actual": "200000000.00",
+    "fecha_saldo": "2026-01-31",
+}
+
+
+async def test_no_se_puede_leer_ni_mutar_un_activo_ajeno(
+    usuario: Usuario, otro_usuario: Usuario
+):
+    creado = await usuario.post("/api/v1/assets", _ACTIVO)
+    assert creado.status_code == 201, creado.text
+    ruta = f"/api/v1/assets/{creado.json()['id']}"
+
+    assert (await otro_usuario.get(ruta)).status_code == 404
+    assert (await otro_usuario.patch(ruta, {"nombre": "Robado"})).status_code == 404
+    assert (await otro_usuario.delete(ruta)).status_code == 404
+    assert (await otro_usuario.get("/api/v1/assets")).json() == []
+
+
+async def test_no_se_puede_valuar_un_activo_ajeno(usuario: Usuario, otro_usuario: Usuario):
+    """El activo llega por la ruta, pero la valuacion es una escritura nueva:
+    si el servicio no revisara la propiedad, cualquiera podria mover el
+    patrimonio de otro."""
+    creado = await usuario.post("/api/v1/assets", _ACTIVO)
+    activo_id = creado.json()["id"]
+
+    intento = await otro_usuario.post(
+        f"/api/v1/assets/{activo_id}/valuations", {"fecha": "2026-03-31", "valor": "1.00"}
+    )
+    assert intento.status_code == 404
+
+    assert (await otro_usuario.get(f"/api/v1/assets/{activo_id}/valuations")).status_code == 404
+    # Y el activo conserva su unica valuacion.
+    assert len((await usuario.get(f"/api/v1/assets/{activo_id}")).json()["valuaciones"]) == 1
+
+
+async def test_no_se_puede_leer_ni_mutar_una_deuda_ajena(
+    usuario: Usuario, otro_usuario: Usuario
+):
+    creada = await usuario.post("/api/v1/liabilities", _DEUDA)
+    assert creada.status_code == 201, creada.text
+    ruta = f"/api/v1/liabilities/{creada.json()['id']}"
+
+    assert (await otro_usuario.get(ruta)).status_code == 404
+    assert (await otro_usuario.patch(ruta, {"nombre": "Ajena"})).status_code == 404
+    assert (await otro_usuario.delete(ruta)).status_code == 404
+    assert (await otro_usuario.get("/api/v1/liabilities")).json() == []
+
+
+async def test_no_se_puede_abonar_a_una_deuda_ajena(usuario: Usuario, otro_usuario: Usuario):
+    creada = await usuario.post("/api/v1/liabilities", _DEUDA)
+    deuda_id = creada.json()["id"]
+
+    intento = await otro_usuario.post(
+        f"/api/v1/liabilities/{deuda_id}/balances", {"fecha": "2026-03-31", "saldo": "0.00"}
+    )
+    assert intento.status_code == 404
+    assert (await usuario.get(f"/api/v1/liabilities/{deuda_id}")).json()["saldo_actual"] == (
+        "200000000.00"
+    )
+
+
+async def test_la_serie_de_patrimonio_solo_cuenta_lo_propio(
+    usuario: Usuario, otro_usuario: Usuario
+):
+    await usuario.post("/api/v1/assets", _ACTIVO)
+    await usuario.post("/api/v1/liabilities", _DEUDA)
+
+    rango = {"desde": "2026-01-01", "hasta": "2026-12-31"}
+    mia = (await usuario.get("/api/v1/networth/series", rango)).json()
+    ajena = (await otro_usuario.get("/api/v1/networth/series", rango)).json()
+
+    assert mia["puntos"][0]["patrimonio_neto"] == "150000000.00"
+    assert ajena["puntos"] == []
+
+    composicion = (await otro_usuario.get("/api/v1/networth/composition")).json()
+    assert composicion["patrimonio_neto"] == "0.00"
+    assert composicion["activos"] == []
