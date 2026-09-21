@@ -20,6 +20,7 @@ from app.models.networth import (
     LiabilityBalance,
     NetWorthSnapshot,
 )
+from app.models.planning import Budget, Goal, GoalContribution
 from app.models.user import RefreshToken, User
 
 __all__ = [
@@ -28,10 +29,13 @@ __all__ = [
     "Asset",
     "AssetType",
     "AssetValuation",
+    "Budget",
     "Category",
     "CategoryType",
     "Currency",
     "ExchangeRate",
+    "Goal",
+    "GoalContribution",
     "Liability",
     "LiabilityBalance",
     "LiabilityType",

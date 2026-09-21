@@ -54,6 +54,15 @@ UNO = Decimal("1")
 # venir de una fecha absurda escrita por error.
 MAX_MESES = 600
 
+# Cuantos dias puede tener la tasa aplicada respecto a la fecha buscada antes
+# de marcar el mes como estimado.
+#
+# No es "no era del dia exacto": nadie carga la tasa todos los dias, asi que con
+# tolerancia cero el aviso se encenderia casi siempre y dejaria de leerse. Una
+# semana distingue lo normal -- la tasa del viernes aplicada al domingo -- de lo
+# que si merece advertencia: haber tenido que estirar meses hacia atras.
+TOLERANCIA_TASA_DIAS = 7
+
 
 def fin_de_mes(d: date) -> date:
     """Ultimo dia del mes de `d`. Es la fecha canonica de todo snapshot."""
@@ -131,15 +140,18 @@ async def _tasa_al_cierre(
 ) -> tuple[Decimal, bool]:
     """Tasa para convertir `origen` a `destino` en la fecha `al`.
 
-    Devuelve `(tasa, estimada)`. Sobre `get_rate` agrega un ultimo recurso: si
-    no hay ninguna tasa con fecha <= `al` pero si existen tasas posteriores, usa
-    la mas antigua conocida y marca `estimada=True`.
+    Devuelve `(tasa, estimada)`. Se diferencia de `get_rate` en dos cosas:
 
-    El motivo es practico: alguien que carga tasas desde 2025 y registra un
-    activo en dolares comprado en 2023 veria fallar la serie entera por los
-    meses viejos. Usar la tasa real mas antigua que se conoce no es inventar un
-    numero -- inventar seria asumir 1 -- y el flag hace que la UI lo advierta.
-    Si no hay ninguna tasa en absoluto, si se falla, con instrucciones.
+    - **`estimada` tolera hasta `TOLERANCIA_TASA_DIAS`.** `get_rate` marca
+      estimada cualquier tasa que no sea del dia exacto, y eso esta bien para
+      una transaccion suelta, donde el aviso se ve junto al monto. En la serie
+      mensual encenderia el aviso casi siempre, hasta volverlo invisible.
+    - **Tiene un ultimo recurso.** Si no hay ninguna tasa con fecha <= `al`
+      pero si existen posteriores, usa la mas antigua conocida. Alguien que
+      carga tasas desde 2025 y registra un activo en dolares comprado en 2023
+      no deberia perder la serie entera por los meses viejos; usar una tasa real
+      vieja no es inventar un numero -- inventar seria asumir 1 -- y el flag lo
+      advierte. Sin ninguna tasa en absoluto si se falla, con instrucciones.
     """
     if origen == destino:
         return UNO, False
@@ -160,7 +172,8 @@ async def _tasa_al_cierre(
             ) from None
         return mas_antigua, True
 
-    return lookup.tasa, lookup.estimada
+    atraso = (al - lookup.fecha_aplicada).days if lookup.fecha_aplicada else 0
+    return lookup.tasa, atraso > TOLERANCIA_TASA_DIAS
 
 
 async def _tasa_mas_antigua(

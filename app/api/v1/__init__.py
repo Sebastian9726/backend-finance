@@ -6,7 +6,9 @@ from app.api.v1 import (
     accounts,
     assets,
     auth,
+    budgets,
     categories,
+    goals,
     liabilities,
     networth,
     reports,
@@ -21,4 +23,6 @@ api_router.include_router(transactions.router)
 api_router.include_router(assets.router)
 api_router.include_router(liabilities.router)
 api_router.include_router(networth.router)
+api_router.include_router(budgets.router)
+api_router.include_router(goals.router)
 api_router.include_router(reports.router)

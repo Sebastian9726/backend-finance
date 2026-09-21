@@ -33,9 +33,12 @@ from app.models import (  # noqa: E402
     Asset,
     AssetType,
     AssetValuation,
+    Budget,
     Category,
     Currency,
     ExchangeRate,
+    Goal,
+    GoalContribution,
     Liability,
     LiabilityBalance,
     LiabilityType,
@@ -91,6 +94,26 @@ DEUDAS = [
      "16.5", 1_180_000),
 ]
 
+# (categoria, limite mensual, umbral de alerta). Los limites estan calibrados
+# contra los GASTOS de arriba para que el semaforo muestre los tres estados:
+# Vivienda holgada, Alimentacion en alerta y Transporte excedido.
+PRESUPUESTOS = [
+    ("Vivienda", 2_200_000, "85"),
+    ("Alimentacion", 1_500_000, "75"),
+    ("Transporte", 400_000, "80"),
+    ("Servicios publicos", 500_000, "80"),
+    ("Entretenimiento", 250_000, "80"),
+    ("Salud", 300_000, "90"),
+]
+
+# (nombre, objetivo, meses hasta la fecha objetivo, aporte mensual)
+METAS = [
+    ("Viaje a Europa", 18_000_000, 10, 1_400_000),
+    ("Fondo de emergencia", 30_000_000, 24, 900_000),
+    # Objetivo apretado para su ritmo: sale marcada en riesgo.
+    ("Cuota inicial apartamento", 60_000_000, 8, 1_200_000),
+]
+
 
 async def main() -> None:
     engine = create_async_engine(settings.database_url)
@@ -105,6 +128,8 @@ async def main() -> None:
         total = await _crear_movimientos(db, user, cuentas, categorias)
         activos = await _crear_activos(db, user)
         deudas = await _crear_deudas(db, user)
+        presupuestos = await _crear_presupuestos(db, user, categorias)
+        metas = await _crear_metas(db, user)
         await db.commit()
 
         # La serie se materializa al final, cuando ya existen todas las
@@ -117,6 +142,7 @@ async def main() -> None:
     print(f"Contrasena: {PASSWORD}")
     print(f"Creadas:    {total} transacciones en {MESES} meses")
     print(f"Patrimonio: {activos} activos, {deudas} deudas, {serie.meses} cierres mensuales")
+    print(f"Planeacion: {presupuestos} presupuestos/mes x3 meses, {metas} metas")
 
 
 async def _limpiar(db: AsyncSession) -> None:
@@ -368,6 +394,71 @@ async def _crear_deudas(db: AsyncSession, user: User) -> int:
 
     await db.flush()
     return len(DEUDAS)
+
+
+async def _crear_presupuestos(
+    db: AsyncSession, user: User, categorias: dict[str, Category]
+) -> int:
+    """Presupuestos para el mes actual y los dos anteriores.
+
+    Tres meses y no uno para que el boton de "copiar del mes anterior" tenga de
+    donde copiar y la pantalla se pueda recorrer hacia atras.
+    """
+    hoy = date.today()
+    for atras in range(2, -1, -1):
+        mes_ref = _primer_dia(hoy, atras)
+        for nombre_cat, limite, alerta in PRESUPUESTOS:
+            categoria = categorias.get(nombre_cat)
+            if categoria is None:
+                continue
+            db.add(
+                Budget(
+                    id=uuid.uuid4(),
+                    user_id=user.id,
+                    category_id=categoria.id,
+                    anio=mes_ref.year,
+                    mes=mes_ref.month,
+                    monto_limite=Decimal(limite),
+                    alerta_pct=Decimal(alerta),
+                )
+            )
+    await db.flush()
+    return len(PRESUPUESTOS)
+
+
+async def _crear_metas(db: AsyncSession, user: User) -> int:
+    """Metas con aportes mensuales hacia atras, para que el ritmo sea medible.
+
+    Sin varios aportes separados en el tiempo no hay ritmo observado y la
+    proyeccion sale vacia, que es justo lo que la pantalla necesita mostrar.
+    """
+    hoy = date.today()
+    for nombre, objetivo, meses_plazo, aporte in METAS:
+        goal = Goal(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            nombre=nombre,
+            moneda=Currency.COP,
+            monto_objetivo=Decimal(objetivo),
+            fecha_objetivo=_primer_dia(hoy, -meses_plazo),
+        )
+        db.add(goal)
+
+        for atras in range(MESES - 1, -1, -1):
+            monto = Decimal(aporte) + Decimal(random.randint(-150, 250)) * 1000
+            db.add(
+                GoalContribution(
+                    id=uuid.uuid4(),
+                    user_id=user.id,
+                    goal_id=goal.id,
+                    fecha=_primer_dia(hoy, atras) + timedelta(days=random.randint(0, 5)),
+                    monto=quantize_money(max(monto, Decimal("100000"))),
+                    nota="Aporte mensual",
+                )
+            )
+
+    await db.flush()
+    return len(METAS)
 
 
 def _fin_de_mes_o_hoy(referencia: date, meses_atras: int) -> date:

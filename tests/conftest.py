@@ -26,6 +26,7 @@ _ADMIN_URL = settings.database_url.rsplit("/", 1)[0] + "/postgres"
 # Orden de truncado irrelevante gracias a CASCADE, pero se listan todas para
 # que agregar una tabla nueva y olvidarla salte como fuga entre pruebas.
 _TABLAS = (
+    "goal_contributions, goals, budgets, "
     "net_worth_snapshots, liability_balances, liabilities, asset_valuations, assets, "
     "transactions, categories, accounts, refresh_tokens, exchange_rates, users"
 )

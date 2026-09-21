@@ -246,3 +246,106 @@ async def test_la_serie_de_patrimonio_solo_cuenta_lo_propio(
     composicion = (await otro_usuario.get("/api/v1/networth/composition")).json()
     assert composicion["patrimonio_neto"] == "0.00"
     assert composicion["activos"] == []
+
+
+# ---------------------------------------------------------------------------
+# Planeacion
+# ---------------------------------------------------------------------------
+
+_MES = {"anio": 2026, "mes": 6}
+
+
+async def test_no_se_puede_mutar_un_presupuesto_ajeno(
+    usuario: Usuario, otro_usuario: Usuario, categoria_gasto: dict
+):
+    creado = await usuario.post(
+        "/api/v1/budgets",
+        {"category_id": categoria_gasto["id"], **_MES, "monto_limite": "500000.00"},
+    )
+    assert creado.status_code == 201, creado.text
+    ruta = f"/api/v1/budgets/{creado.json()['id']}"
+
+    assert (await otro_usuario.patch(ruta, {"monto_limite": "1.00"})).status_code == 404
+    assert (await otro_usuario.delete(ruta)).status_code == 404
+    assert (await otro_usuario.get("/api/v1/budgets", _MES)).json() == []
+
+
+async def test_no_se_puede_presupuestar_una_categoria_ajena(
+    otro_usuario: Usuario, categoria_gasto: dict
+):
+    """El id ajeno llega en el cuerpo, no en la ruta."""
+    response = await otro_usuario.post(
+        "/api/v1/budgets",
+        {"category_id": categoria_gasto["id"], **_MES, "monto_limite": "100.00"},
+    )
+    assert response.status_code == 404
+
+
+async def test_el_status_de_presupuesto_solo_cuenta_lo_propio(
+    usuario: Usuario, otro_usuario: Usuario, cuenta: dict, categoria_gasto: dict
+):
+    await usuario.post(
+        "/api/v1/budgets",
+        {"category_id": categoria_gasto["id"], **_MES, "monto_limite": "500000.00"},
+    )
+    await usuario.post(
+        "/api/v1/transactions",
+        {
+            "account_id": cuenta["id"],
+            "category_id": categoria_gasto["id"],
+            "tipo": "gasto",
+            "monto": "-200000.00",
+            "fecha": "2026-06-15",
+            "descripcion": "Mercado",
+        },
+    )
+
+    mio = (await usuario.get("/api/v1/budgets/status", _MES)).json()
+    ajeno = (await otro_usuario.get("/api/v1/budgets/status", _MES)).json()
+
+    assert mio["total_ejecutado"] == "200000.00"
+    assert ajeno["lineas"] == []
+    assert ajeno["total_ejecutado"] == "0.00"
+    assert ajeno["total_sin_presupuesto"] == "0.00"
+
+
+async def test_no_se_puede_leer_ni_mutar_una_meta_ajena(
+    usuario: Usuario, otro_usuario: Usuario
+):
+    creada = await usuario.post(
+        "/api/v1/goals",
+        {"nombre": "Viaje", "moneda": "COP", "monto_objetivo": "10000000.00"},
+    )
+    assert creada.status_code == 201, creada.text
+    ruta = f"/api/v1/goals/{creada.json()['id']}"
+
+    assert (await otro_usuario.get(ruta)).status_code == 404
+    assert (await otro_usuario.patch(ruta, {"nombre": "Robada"})).status_code == 404
+    assert (await otro_usuario.delete(ruta)).status_code == 404
+    assert (await otro_usuario.get("/api/v1/goals")).json() == []
+
+
+async def test_no_se_puede_aportar_a_una_meta_ajena(usuario: Usuario, otro_usuario: Usuario):
+    creada = await usuario.post(
+        "/api/v1/goals",
+        {
+            "nombre": "Ahorro",
+            "moneda": "COP",
+            "monto_objetivo": "5000000.00",
+            "monto_inicial": "1000000.00",
+        },
+    )
+    meta_id = creada.json()["id"]
+
+    intento = await otro_usuario.post(
+        f"/api/v1/goals/{meta_id}/contributions", {"fecha": "2026-06-15", "monto": "999.00"}
+    )
+    assert intento.status_code == 404
+    assert (
+        await otro_usuario.get(f"/api/v1/goals/{meta_id}/contributions")
+    ).status_code == 404
+
+    # Y el acumulado de la meta no se movio.
+    assert (await usuario.get(f"/api/v1/goals/{meta_id}")).json()["monto_actual"] == (
+        "1000000.00"
+    )

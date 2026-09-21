@@ -375,6 +375,51 @@ async def test_sin_ninguna_tasa_un_activo_en_usd_falla_con_instrucciones(usuario
     assert "tasa de cambio" in response.json()["detail"]
 
 
+async def test_una_tasa_de_pocos_dias_antes_no_marca_el_mes(usuario: Usuario):
+    """Nadie carga la tasa todos los dias.
+
+    Con tolerancia cero el aviso se encenderia practicamente siempre y dejaria
+    de leerse, que es peor que no tenerlo. La tasa del 27 aplicada al cierre
+    del 31 es lo normal, no algo que advertir.
+    """
+    await _tasa(usuario, "2026-01-27", "4000.00000000")
+
+    await usuario.post(
+        "/api/v1/assets",
+        {
+            "nombre": "Cuenta USD",
+            "tipo": "ahorro",
+            "moneda": "USD",
+            "valor_actual": "1000.00",
+            "fecha_valor": ENERO,
+        },
+    )
+
+    enero = _punto(await _serie(usuario), ENERO)
+    assert enero["total_activos"] == "4000000.00"
+    assert enero["tasa_estimada"] is False
+
+
+async def test_una_tasa_de_meses_atras_si_marca_el_mes(usuario: Usuario):
+    """Estirar la tasa de enero hasta marzo si merece advertencia."""
+    await _tasa(usuario, ENERO, "4000.00000000")
+
+    await usuario.post(
+        "/api/v1/assets",
+        {
+            "nombre": "Cuenta USD",
+            "tipo": "ahorro",
+            "moneda": "USD",
+            "valor_actual": "1000.00",
+            "fecha_valor": ENERO,
+        },
+    )
+
+    puntos = await _serie(usuario)
+    assert _punto(puntos, ENERO)["tasa_estimada"] is False
+    assert _punto(puntos, MARZO)["tasa_estimada"] is True
+
+
 async def test_una_tasa_posterior_sirve_de_ultimo_recurso_y_queda_marcada(usuario: Usuario):
     """Quien carga tasas desde marzo y registra un activo de enero no deberia
     perder la serie entera: se usa la tasa real mas antigua y se marca."""
